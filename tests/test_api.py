@@ -5,7 +5,7 @@ from pathlib import Path
 
 from inventory.web import create_app
 from inventory.db import get_connection, init_db
-from inventory.models import Product, OrderType
+from inventory.models import Product, OrderType, Supplier
 from inventory import service
 
 
@@ -347,3 +347,91 @@ def test_reorder_shows_low_stock(seeded):
     rows = r.get_json()
     assert len(rows) == 1
     assert rows[0]["shortfall"] == 2  # threshold=5, qty=3
+
+
+# ── suppliers ─────────────────────────────────────────────────────────────────
+
+def test_suppliers_list_empty(client):
+    r = get(client, "/suppliers")
+    assert r.status_code == 200
+    assert r.get_json() == []
+
+
+def test_suppliers_create(client):
+    r = post(client, "/suppliers", json={"name": "Acme", "lead_time_days": 3})
+    assert r.status_code == 201
+    data = r.get_json()
+    assert data["name"] == "Acme"
+    assert data["lead_time_days"] == 3
+    assert data["id"] is not None
+
+
+def test_suppliers_create_missing_name(client):
+    r = post(client, "/suppliers", json={"lead_time_days": 1})
+    assert r.status_code == 400
+    assert "error" in r.get_json()
+
+
+def test_suppliers_get(client):
+    sid = post(client, "/suppliers", json={"name": "Globex"}).get_json()["id"]
+    r = get(client, f"/suppliers/{sid}")
+    assert r.status_code == 200
+    assert r.get_json()["name"] == "Globex"
+
+
+def test_suppliers_get_not_found(client):
+    assert get(client, "/suppliers/999").status_code == 404
+
+
+def test_suppliers_update(client):
+    sid = post(client, "/suppliers", json={"name": "OldName"}).get_json()["id"]
+    r = patch(client, f"/suppliers/{sid}", json={"name": "NewName", "lead_time_days": 7})
+    assert r.status_code == 200
+    data = r.get_json()
+    assert data["name"] == "NewName"
+    assert data["lead_time_days"] == 7
+
+
+def test_suppliers_update_not_found(client):
+    r = patch(client, "/suppliers/999", json={"name": "Ghost"})
+    assert r.status_code == 404
+
+
+def test_suppliers_delete(client):
+    sid = post(client, "/suppliers", json={"name": "ToDelete"}).get_json()["id"]
+    r = delete(client, f"/suppliers/{sid}")
+    assert r.status_code == 204
+    assert get(client, f"/suppliers/{sid}").status_code == 404
+
+
+def test_suppliers_delete_blocked_by_product(client):
+    sid = post(client, "/suppliers", json={"name": "Linked"}).get_json()["id"]
+    post(client, "/products", json={"sku": "S-1", "name": "Item", "unit_price": 1.0, "supplier_id": sid})
+    r = delete(client, f"/suppliers/{sid}")
+    assert r.status_code == 409
+
+
+def test_suppliers_delete_not_found(client):
+    assert delete(client, "/suppliers/999").status_code == 404
+
+
+def test_suppliers_products(client):
+    sid = post(client, "/suppliers", json={"name": "Acme"}).get_json()["id"]
+    post(client, "/products", json={"sku": "P-1", "name": "Prod1", "unit_price": 5.0, "supplier_id": sid})
+    post(client, "/products", json={"sku": "P-2", "name": "Prod2", "unit_price": 6.0})
+    r = get(client, f"/suppliers/{sid}/products")
+    assert r.status_code == 200
+    products = r.get_json()
+    assert len(products) == 1
+    assert products[0]["sku"] == "P-1"
+
+
+def test_product_includes_supplier_id(client):
+    sid = post(client, "/suppliers", json={"name": "Acme"}).get_json()["id"]
+    r = post(client, "/products", json={"sku": "X-1", "name": "Linked", "unit_price": 3.0, "supplier_id": sid})
+    assert r.get_json()["supplier_id"] == sid
+
+
+def test_product_create_invalid_supplier(client):
+    r = post(client, "/products", json={"sku": "X-2", "name": "Ghost", "unit_price": 1.0, "supplier_id": 999})
+    assert r.status_code == 400

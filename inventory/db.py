@@ -24,12 +24,22 @@ def transaction(conn: sqlite3.Connection):
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript("""
+        CREATE TABLE IF NOT EXISTS suppliers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            contact_name TEXT,
+            email TEXT,
+            phone TEXT,
+            lead_time_days INTEGER NOT NULL DEFAULT 0
+        );
+
         CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             sku TEXT NOT NULL UNIQUE,
             name TEXT NOT NULL,
             unit_price REAL NOT NULL,
-            reorder_threshold INTEGER NOT NULL DEFAULT 10
+            reorder_threshold INTEGER NOT NULL DEFAULT 10,
+            supplier_id INTEGER REFERENCES suppliers(id)
         );
 
         CREATE TABLE IF NOT EXISTS stock_levels (
@@ -57,3 +67,12 @@ def init_db(conn: sqlite3.Connection) -> None:
         );
     """)
     conn.commit()
+    _migrate(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Apply additive schema changes to existing databases."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(products)")}
+    if "supplier_id" not in existing:
+        conn.execute("ALTER TABLE products ADD COLUMN supplier_id INTEGER REFERENCES suppliers(id)")
+        conn.commit()

@@ -3,7 +3,7 @@ import functools
 from pathlib import Path
 
 from .db import get_connection, init_db
-from .models import OrderStatus, OrderType
+from .models import OrderStatus, OrderType, Supplier
 from . import service
 
 
@@ -78,11 +78,14 @@ def product():
 @click.option("--name", required=True)
 @click.option("--price", required=True, type=float)
 @click.option("--threshold", default=10, show_default=True, type=int)
+@click.option("--supplier-id", type=int, default=None, help="Link to supplier by ID")
 @click.pass_context
-def product_add(ctx, sku, name, price, threshold):
+@_bail
+def product_add(ctx, sku, name, price, threshold, supplier_id):
     from .models import Product
-    p = service.create_product(_conn(ctx), Product(None, sku, name, price, threshold))
-    click.echo(f"Created product #{p.id}: {p.name} (SKU: {p.sku}, price: ${p.unit_price:.2f})")
+    p = service.create_product(_conn(ctx), Product(None, sku, name, price, threshold, supplier_id=supplier_id))
+    supplier_info = f", supplier: #{p.supplier_id}" if p.supplier_id else ""
+    click.echo(f"Created product #{p.id}: {p.name} (SKU: {p.sku}, price: ${p.unit_price:.2f}{supplier_info})")
 
 
 @product.command("list")
@@ -104,14 +107,17 @@ def product_list(ctx):
 @click.option("--name")
 @click.option("--price", type=float)
 @click.option("--threshold", type=int)
+@click.option("--supplier-id", type=int, default=None, help="Link to supplier by ID (0 to unlink)")
 @click.pass_context
 @_bail
-def product_update(ctx, product_id, sku, name, price, threshold):
+def product_update(ctx, product_id, sku, name, price, threshold, supplier_id):
     p = service.get_product(_conn(ctx), product_id)
     p.sku = sku or p.sku
     p.name = name or p.name
     p.unit_price = price if price is not None else p.unit_price
     p.reorder_threshold = threshold if threshold is not None else p.reorder_threshold
+    if supplier_id is not None:
+        p.supplier_id = None if supplier_id == 0 else supplier_id
     updated = service.update_product(_conn(ctx), p)
     click.echo(f"Updated product #{updated.id}: {updated.name}")
 
@@ -128,6 +134,94 @@ def product_delete(ctx, product_id, yes):
         click.confirm(f"Delete '{p.name}' (#{p.id})?", abort=True)
     service.delete_product(_conn(ctx), product_id)
     click.echo(f"Deleted product #{p.id}: {p.name}")
+
+
+# ── suppliers ────────────────────────────────────────────────────────────────
+
+@cli.group()
+def supplier():
+    """Manage suppliers."""
+
+
+@supplier.command("add")
+@click.option("--name", required=True)
+@click.option("--contact", default=None)
+@click.option("--email", default=None)
+@click.option("--phone", default=None)
+@click.option("--lead-time", default=0, show_default=True, type=int, help="Lead time in days")
+@click.pass_context
+@_bail
+def supplier_add(ctx, name, contact, email, phone, lead_time):
+    """Add a new supplier."""
+    s = service.create_supplier(_conn(ctx), Supplier(None, name, contact, email, phone, lead_time))
+    click.echo(f"Created supplier #{s.id}: {s.name} (lead time: {s.lead_time_days}d)")
+
+
+@supplier.command("list")
+@click.pass_context
+def supplier_list(ctx):
+    """List all suppliers."""
+    suppliers = service.list_suppliers(_conn(ctx))
+    if not suppliers:
+        click.echo("No suppliers.")
+        return
+    click.echo(f"{'ID':<5} {'Name':<25} {'Contact':<20} {'Email':<25} {'Lead (d)':>8}")
+    click.echo("-" * 85)
+    for s in suppliers:
+        click.echo(
+            f"{s.id:<5} {s.name:<25} {(s.contact_name or ''):<20} "
+            f"{(s.email or ''):<25} {s.lead_time_days:>8}"
+        )
+
+
+@supplier.command("show")
+@click.argument("supplier_id", type=int)
+@click.pass_context
+@_bail
+def supplier_show(ctx, supplier_id):
+    """Show supplier details."""
+    s = service.get_supplier(_conn(ctx), supplier_id)
+    click.echo(f"ID:           {s.id}")
+    click.echo(f"Name:         {s.name}")
+    click.echo(f"Contact:      {s.contact_name or '—'}")
+    click.echo(f"Email:        {s.email or '—'}")
+    click.echo(f"Phone:        {s.phone or '—'}")
+    click.echo(f"Lead time:    {s.lead_time_days} day(s)")
+
+
+@supplier.command("update")
+@click.argument("supplier_id", type=int)
+@click.option("--name")
+@click.option("--contact")
+@click.option("--email")
+@click.option("--phone")
+@click.option("--lead-time", type=int)
+@click.pass_context
+@_bail
+def supplier_update(ctx, supplier_id, name, contact, email, phone, lead_time):
+    """Update supplier details."""
+    s = service.get_supplier(_conn(ctx), supplier_id)
+    s.name = name or s.name
+    s.contact_name = contact if contact is not None else s.contact_name
+    s.email = email if email is not None else s.email
+    s.phone = phone if phone is not None else s.phone
+    s.lead_time_days = lead_time if lead_time is not None else s.lead_time_days
+    updated = service.update_supplier(_conn(ctx), s)
+    click.echo(f"Updated supplier #{updated.id}: {updated.name}")
+
+
+@supplier.command("delete")
+@click.argument("supplier_id", type=int)
+@click.option("--yes", "-y", is_flag=True)
+@click.pass_context
+@_bail
+def supplier_delete(ctx, supplier_id, yes):
+    """Delete a supplier (blocked if products still reference it)."""
+    s = service.get_supplier(_conn(ctx), supplier_id)
+    if not yes:
+        click.confirm(f"Delete supplier '{s.name}' (#{s.id})?", abort=True)
+    service.delete_supplier(_conn(ctx), supplier_id)
+    click.echo(f"Deleted supplier #{s.id}: {s.name}")
 
 
 # ── stock ────────────────────────────────────────────────────────────────────

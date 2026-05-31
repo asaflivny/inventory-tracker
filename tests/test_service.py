@@ -2,9 +2,9 @@ import pytest
 import sqlite3
 
 from inventory.db import init_db
-from inventory.models import OrderType, OrderStatus, Product
+from inventory.models import OrderType, OrderStatus, Product, Supplier
 from inventory import service
-from inventory.service import InsufficientStock, InvalidStatusTransition, ProductNotFound
+from inventory.service import InsufficientStock, InvalidStatusTransition, ProductNotFound, SupplierNotFound
 
 
 @pytest.fixture
@@ -355,3 +355,82 @@ def test_list_orders_since_until_includes_today(conn, widget):
     today = datetime.utcnow()
     orders = service.list_orders(conn, since=today, until=today)
     assert len(orders) == 1
+
+
+# ── supplier tests ───────────────────────────────────────────────────────────
+
+@pytest.fixture
+def acme(conn):
+    return service.create_supplier(conn, Supplier(None, "Acme Corp", "Alice", "alice@acme.com", "555-1234", 3))
+
+
+def test_create_supplier(conn):
+    s = service.create_supplier(conn, Supplier(None, "Globex", lead_time_days=5))
+    assert s.id is not None
+    assert s.name == "Globex"
+    assert s.lead_time_days == 5
+
+
+def test_get_supplier(conn, acme):
+    s = service.get_supplier(conn, acme.id)
+    assert s.name == "Acme Corp"
+    assert s.email == "alice@acme.com"
+
+
+def test_get_supplier_not_found(conn):
+    with pytest.raises(SupplierNotFound):
+        service.get_supplier(conn, 999)
+
+
+def test_list_suppliers(conn, acme):
+    service.create_supplier(conn, Supplier(None, "Initech"))
+    suppliers = service.list_suppliers(conn)
+    assert len(suppliers) == 2
+    assert suppliers[0].name == "Acme Corp"  # alphabetical
+
+
+def test_update_supplier(conn, acme):
+    acme.lead_time_days = 7
+    acme.contact_name = "Bob"
+    updated = service.update_supplier(conn, acme)
+    assert updated.lead_time_days == 7
+    assert updated.contact_name == "Bob"
+
+
+def test_delete_supplier(conn, acme):
+    service.delete_supplier(conn, acme.id)
+    with pytest.raises(SupplierNotFound):
+        service.get_supplier(conn, acme.id)
+
+
+def test_delete_supplier_blocked_when_product_linked(conn, acme):
+    service.create_product(conn, Product(None, "S-1", "SuppliedItem", 5.0, supplier_id=acme.id))
+    with pytest.raises(service.InventoryError):
+        service.delete_supplier(conn, acme.id)
+
+
+def test_create_product_with_supplier(conn, acme):
+    p = service.create_product(conn, Product(None, "S-2", "Widget Pro", 19.99, supplier_id=acme.id))
+    assert p.supplier_id == acme.id
+
+
+def test_create_product_with_invalid_supplier_raises(conn):
+    with pytest.raises(SupplierNotFound):
+        service.create_product(conn, Product(None, "S-3", "Ghost Item", 9.99, supplier_id=999))
+
+
+def test_update_product_supplier(conn, acme):
+    p = service.create_product(conn, Product(None, "S-4", "Switchable", 5.0))
+    p.supplier_id = acme.id
+    updated = service.update_product(conn, p)
+    assert updated.supplier_id == acme.id
+
+
+def test_supplier_invalid_name_raises():
+    with pytest.raises(ValueError):
+        Supplier(None, "")
+
+
+def test_supplier_negative_lead_time_raises():
+    with pytest.raises(ValueError):
+        Supplier(None, "Bad", lead_time_days=-1)

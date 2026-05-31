@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional, Union
 
 from .db import transaction
-from .models import Alert, Order, OrderStatus, OrderType, Product, StockLevel
+from .models import Alert, Order, OrderStatus, OrderType, Product, StockLevel, Supplier
 
 
 class InventoryError(Exception):
@@ -11,6 +11,10 @@ class InventoryError(Exception):
 
 
 class ProductNotFound(InventoryError):
+    pass
+
+
+class SupplierNotFound(InventoryError):
     pass
 
 
@@ -25,11 +29,13 @@ class InvalidStatusTransition(InventoryError):
 # ---------- products ----------
 
 def create_product(conn: sqlite3.Connection, product: Product) -> Product:
+    if product.supplier_id is not None:
+        _require_supplier(conn, product.supplier_id)
     try:
         with transaction(conn):
             cur = conn.execute(
-                "INSERT INTO products (sku, name, unit_price, reorder_threshold) VALUES (?, ?, ?, ?)",
-                (product.sku, product.name, product.unit_price, product.reorder_threshold),
+                "INSERT INTO products (sku, name, unit_price, reorder_threshold, supplier_id) VALUES (?, ?, ?, ?, ?)",
+                (product.sku, product.name, product.unit_price, product.reorder_threshold, product.supplier_id),
             )
             product_id = cur.lastrowid
             conn.execute(
@@ -52,10 +58,12 @@ def list_products(conn: sqlite3.Connection) -> list[Product]:
 
 def update_product(conn: sqlite3.Connection, product: Product) -> Product:
     _require_product(conn, product.id)
+    if product.supplier_id is not None:
+        _require_supplier(conn, product.supplier_id)
     with transaction(conn):
         conn.execute(
-            "UPDATE products SET sku=?, name=?, unit_price=?, reorder_threshold=? WHERE id=?",
-            (product.sku, product.name, product.unit_price, product.reorder_threshold, product.id),
+            "UPDATE products SET sku=?, name=?, unit_price=?, reorder_threshold=?, supplier_id=? WHERE id=?",
+            (product.sku, product.name, product.unit_price, product.reorder_threshold, product.supplier_id, product.id),
         )
     return _get_product_by_id(conn, product.id)
 
@@ -372,12 +380,14 @@ def _get_order(conn: sqlite3.Connection, order_id: int) -> Order:
 
 
 def _row_to_product(row) -> Product:
+    keys = row.keys()
     return Product(
         id=row["id"],
         sku=row["sku"],
         name=row["name"],
         unit_price=row["unit_price"],
         reorder_threshold=row["reorder_threshold"],
+        supplier_id=row["supplier_id"] if "supplier_id" in keys else None,
     )
 
 
@@ -393,6 +403,71 @@ def _row_to_order(row) -> Order:
         created_at=datetime.fromisoformat(row["created_at"]),
         product_name=row["product_name"] if "product_name" in keys else None,
         product_sku=row["product_sku"] if "product_sku" in keys else None,
+    )
+
+
+# ---------- suppliers ----------
+
+def create_supplier(conn: sqlite3.Connection, supplier: Supplier) -> Supplier:
+    with transaction(conn):
+        cur = conn.execute(
+            "INSERT INTO suppliers (name, contact_name, email, phone, lead_time_days) VALUES (?, ?, ?, ?, ?)",
+            (supplier.name, supplier.contact_name, supplier.email, supplier.phone, supplier.lead_time_days),
+        )
+    return _get_supplier_by_id(conn, cur.lastrowid)
+
+
+def get_supplier(conn: sqlite3.Connection, supplier_id: int) -> Supplier:
+    return _require_supplier(conn, supplier_id)
+
+
+def list_suppliers(conn: sqlite3.Connection) -> list[Supplier]:
+    rows = conn.execute("SELECT * FROM suppliers ORDER BY name").fetchall()
+    return [_row_to_supplier(r) for r in rows]
+
+
+def update_supplier(conn: sqlite3.Connection, supplier: Supplier) -> Supplier:
+    _require_supplier(conn, supplier.id)
+    with transaction(conn):
+        conn.execute(
+            "UPDATE suppliers SET name=?, contact_name=?, email=?, phone=?, lead_time_days=? WHERE id=?",
+            (supplier.name, supplier.contact_name, supplier.email, supplier.phone, supplier.lead_time_days, supplier.id),
+        )
+    return _get_supplier_by_id(conn, supplier.id)
+
+
+def delete_supplier(conn: sqlite3.Connection, supplier_id: int) -> None:
+    _require_supplier(conn, supplier_id)
+    product_count = conn.execute(
+        "SELECT COUNT(*) FROM products WHERE supplier_id = ?", (supplier_id,)
+    ).fetchone()[0]
+    if product_count > 0:
+        raise InventoryError(
+            f"Cannot delete supplier {supplier_id}: {product_count} product(s) still reference it"
+        )
+    with transaction(conn):
+        conn.execute("DELETE FROM suppliers WHERE id = ?", (supplier_id,))
+
+
+def _require_supplier(conn: sqlite3.Connection, supplier_id: int) -> Supplier:
+    row = conn.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+    if not row:
+        raise SupplierNotFound(f"Supplier {supplier_id} not found")
+    return _row_to_supplier(row)
+
+
+def _get_supplier_by_id(conn: sqlite3.Connection, supplier_id: int) -> Supplier:
+    return _require_supplier(conn, supplier_id)
+
+
+def _row_to_supplier(row) -> Supplier:
+    return Supplier(
+        id=row["id"],
+        name=row["name"],
+        contact_name=row["contact_name"],
+        email=row["email"],
+        phone=row["phone"],
+        lead_time_days=row["lead_time_days"],
     )
 
 

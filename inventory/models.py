@@ -4,6 +4,22 @@ from enum import Enum
 from typing import Optional
 
 
+@dataclass
+class Supplier:
+    id: Optional[int]
+    name: str
+    contact_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    lead_time_days: int = 0
+
+    def __post_init__(self):
+        if not self.name or not self.name.strip():
+            raise ValueError("name must not be empty")
+        if self.lead_time_days < 0:
+            raise ValueError("lead_time_days must be non-negative")
+
+
 class OrderType(str, Enum):
     PURCHASE = "purchase"  # stock in
     SALE = "sale"          # stock out
@@ -22,6 +38,7 @@ class Product:
     name: str
     unit_price: float
     reorder_threshold: int = 10
+    supplier_id: Optional[int] = None
 
     def __post_init__(self):
         if self.unit_price < 0:
