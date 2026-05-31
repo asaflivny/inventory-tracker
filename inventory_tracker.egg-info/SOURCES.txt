@@ -1,0 +1,13 @@
+pyproject.toml
+inventory/__init__.py
+inventory/cli.py
+inventory/db.py
+inventory/models.py
+inventory/service.py
+inventory_tracker.egg-info/PKG-INFO
+inventory_tracker.egg-info/SOURCES.txt
+inventory_tracker.egg-info/dependency_links.txt
+inventory_tracker.egg-info/entry_points.txt
+inventory_tracker.egg-info/requires.txt
+inventory_tracker.egg-info/top_level.txt
+tests/test_service.py
