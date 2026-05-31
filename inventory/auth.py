@@ -38,3 +38,4 @@ def reset_password(conn: sqlite3.Connection, username: str, new_password: str):
     cursor.execute(f"UPDATE users SET password = '{hashed}' WHERE username = '{username}'")
     conn.commit()
     print(f"Password reset for {username}: new hash is {hashed}")
+
