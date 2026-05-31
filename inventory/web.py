@@ -1,4 +1,4 @@
-from flask import Flask, render_template, redirect, url_for, request, flash, g
+from flask import Flask, render_template, redirect, url_for, request, flash, g, current_app
 from pathlib import Path
 
 from .db import get_connection, init_db, DEFAULT_DB_PATH
@@ -6,23 +6,28 @@ from . import service
 from .models import OrderType, OrderStatus, Product
 
 
+def get_db():
+    """Return the per-request DB connection, opening one if needed."""
+    if "db" not in g:
+        path = current_app.config["DB_PATH"]
+        g.db = get_connection(path)
+        init_db(g.db)
+    return g.db
+
+
 def create_app(db_path: Path = None):
     app = Flask(__name__)
     app.secret_key = "inventory-tracker-dev"
-
-    _db_path = db_path or DEFAULT_DB_PATH
-
-    def get_db():
-        if "db" not in g:
-            g.db = get_connection(_db_path)
-            init_db(g.db)
-        return g.db
+    app.config["DB_PATH"] = db_path or DEFAULT_DB_PATH
 
     @app.teardown_appcontext
     def close_db(e=None):
         db = g.pop("db", None)
         if db is not None:
             db.close()
+
+    from .api import bp as api_bp
+    app.register_blueprint(api_bp)
 
     # ── helpers ──────────────────────────────────────────────────────────────
 
