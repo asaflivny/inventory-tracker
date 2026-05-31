@@ -46,6 +46,17 @@ inv alert list                       # Show pending/all alerts
 inv alert ack <alert_id>             # Acknowledge a low-stock alert
 inv alert ack-all                    # Acknowledge all pending alerts
 
+inv supplier list                    # List all suppliers
+inv supplier add "Name" --contact "Jane" --email j@co.com --lead-time 7
+inv supplier show <id>               # Show supplier with linked products
+inv supplier update <id> --name "New Name" --lead-time 5
+inv supplier delete <id>             # Delete supplier (blocked if products reference it)
+
+inv import products products.csv     # Import products from CSV file
+inv export stock stock.csv           # Export current stock levels to CSV
+inv export orders orders.csv         # Export orders to CSV
+inv export orders orders.csv --status fulfilled --product-id 3
+
 inv serve                            # Start web UI (default: localhost:5000)
 inv serve --port 8000 --debug        # Custom port and debug mode
 ```
@@ -79,6 +90,19 @@ All endpoints at `/api/v1` return JSON. Full list:
 - `POST /api/v1/alerts/<id>/ack` — acknowledge
 - `POST /api/v1/alerts/ack-all` — acknowledge all
 
+**Suppliers**
+- `GET /api/v1/suppliers` — list all
+- `POST /api/v1/suppliers` — create (JSON: `name`, `contact`, `email`, `phone`, `lead_time_days`)
+- `GET /api/v1/suppliers/<id>` — get one
+- `PATCH /api/v1/suppliers/<id>` — update fields
+- `DELETE /api/v1/suppliers/<id>` — delete
+- `GET /api/v1/suppliers/<id>/products` — products linked to supplier
+
+**Import / Export**
+- `POST /api/v1/import/products` — import products from CSV (`text/csv` body)
+- `GET /api/v1/export/stock.csv` — download stock levels as CSV
+- `GET /api/v1/export/orders.csv` — download orders as CSV (filters: `?product_id=`, `?status=`)
+
 **Dashboard**
 - `GET /api/v1/summary` — inventory metrics
 - `GET /api/v1/reorder` — products below reorder threshold
@@ -109,7 +133,8 @@ Test coverage includes service layer, web endpoints, API responses, and error ca
 SQLite database at `inventory.db` (or custom path via `--db` flag).
 
 Schema includes:
-- `products` — SKU, name, unit price, reorder threshold
+- `products` — SKU, name, unit price, reorder threshold, optional supplier link
+- `suppliers` — name, contact, email, phone, lead time in days
 - `stock_adjustments` — history of all stock changes
 - `orders` — buy/sell operations with dates and fulfillment status
 - `alerts` — low-stock warnings with acknowledgment status
