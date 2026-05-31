@@ -1,6 +1,8 @@
+import csv
+import io
 import sqlite3
 from datetime import datetime
-from typing import Optional, Union
+from typing import IO, Optional, Union
 
 from .db import transaction
 from .models import Alert, Order, OrderStatus, OrderType, Product, StockLevel, Supplier
@@ -404,6 +406,115 @@ def _row_to_order(row) -> Order:
         product_name=row["product_name"] if "product_name" in keys else None,
         product_sku=row["product_sku"] if "product_sku" in keys else None,
     )
+
+
+# ---------- bulk import / export ----------
+
+_IMPORT_REQUIRED = {"sku", "name", "unit_price"}
+_IMPORT_OPTIONAL = {"reorder_threshold", "supplier_id", "opening_stock"}
+
+
+def import_products_csv(conn: sqlite3.Connection, fileobj: IO[str]) -> dict:
+    """
+    Import products (and optional opening stock) from a CSV file-like object.
+
+    Required columns: sku, name, unit_price
+    Optional columns: reorder_threshold, supplier_id, opening_stock
+
+    Returns a summary dict: {created, skipped, errors: [{row, reason}]}
+    """
+    reader = csv.DictReader(fileobj)
+    if not reader.fieldnames:
+        raise InventoryError("CSV file is empty or has no header row")
+
+    missing = _IMPORT_REQUIRED - {f.strip().lower() for f in reader.fieldnames}
+    if missing:
+        raise InventoryError(f"CSV missing required columns: {', '.join(sorted(missing))}")
+
+    created = 0
+    skipped = 0
+    errors: list[dict] = []
+
+    for i, row in enumerate(reader, start=2):  # row 1 is header
+        row = {k.strip().lower(): v.strip() for k, v in row.items() if k}
+        try:
+            supplier_id = int(row["supplier_id"]) if row.get("supplier_id") else None
+            threshold = int(row["reorder_threshold"]) if row.get("reorder_threshold") else 10
+            opening = int(row["opening_stock"]) if row.get("opening_stock") else 0
+            if opening < 0:
+                raise ValueError("opening_stock must be non-negative")
+
+            product = Product(
+                id=None,
+                sku=row["sku"],
+                name=row["name"],
+                unit_price=float(row["unit_price"]),
+                reorder_threshold=threshold,
+                supplier_id=supplier_id,
+            )
+            p = create_product(conn, product)
+            created += 1
+
+            if opening > 0:
+                order = create_order(conn, p.id, OrderType.PURCHASE, opening, p.unit_price)
+                fulfill_order(conn, order.id)
+
+        except InventoryError as e:
+            if "already exists" in str(e):
+                skipped += 1
+            else:
+                errors.append({"row": i, "reason": str(e)})
+        except (ValueError, KeyError) as e:
+            errors.append({"row": i, "reason": str(e)})
+
+    return {"created": created, "skipped": skipped, "errors": errors}
+
+
+def export_stock_csv(conn: sqlite3.Connection, fileobj: IO[str]) -> None:
+    """Write current stock levels to fileobj as CSV."""
+    rows = list_stock(conn)
+    writer = csv.DictWriter(
+        fileobj,
+        fieldnames=["id", "sku", "name", "quantity", "reorder_threshold", "status"],
+        lineterminator="\n",
+    )
+    writer.writeheader()
+    for r in rows:
+        writer.writerow({
+            "id": r["id"],
+            "sku": r["sku"],
+            "name": r["name"],
+            "quantity": r["quantity"],
+            "reorder_threshold": r["reorder_threshold"],
+            "status": "LOW" if r["quantity"] <= r["reorder_threshold"] else "OK",
+        })
+
+
+def export_orders_csv(conn: sqlite3.Connection, fileobj: IO[str],
+                      product_id: Optional[int] = None,
+                      status: Optional[OrderStatus] = None) -> None:
+    """Write orders to fileobj as CSV. Supports same filters as list_orders."""
+    orders = list_orders(conn, product_id=product_id, status=status)
+    writer = csv.DictWriter(
+        fileobj,
+        fieldnames=["id", "product_id", "product_sku", "product_name", "order_type",
+                    "quantity", "unit_price", "total", "status", "created_at"],
+        lineterminator="\n",
+    )
+    writer.writeheader()
+    for o in orders:
+        writer.writerow({
+            "id": o.id,
+            "product_id": o.product_id,
+            "product_sku": o.product_sku or "",
+            "product_name": o.product_name or "",
+            "order_type": o.order_type.value,
+            "quantity": o.quantity,
+            "unit_price": o.unit_price,
+            "total": o.total,
+            "status": o.status.value,
+            "created_at": o.created_at.isoformat(),
+        })
 
 
 # ---------- suppliers ----------

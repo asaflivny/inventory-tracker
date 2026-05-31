@@ -1,6 +1,7 @@
+import io
 from datetime import datetime
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
 from . import service
 from .models import OrderStatus, OrderType, Product, Supplier
@@ -322,6 +323,52 @@ def suppliers_products(supplier_id):
         return jsonify([_product(p) for p in products])
     except service.SupplierNotFound as e:
         return _err(str(e), 404)
+
+
+# ── import / export ──────────────────────────────────────────────────────────
+
+@bp.route("/import/products", methods=["POST"])
+def import_products():
+    if "file" not in request.files:
+        return _err("No file uploaded (expected multipart field 'file')")
+    f = request.files["file"]
+    try:
+        text = io.StringIO(f.stream.read().decode("utf-8"), newline=None)
+        result = service.import_products_csv(get_db(), text)
+        status = 200 if not result["errors"] else 207
+        return jsonify(result), status
+    except service.InventoryError as e:
+        return _err(str(e))
+    except UnicodeDecodeError:
+        return _err("File must be UTF-8 encoded")
+
+
+@bp.route("/export/stock.csv")
+def export_stock():
+    buf = io.StringIO()
+    service.export_stock_csv(get_db(), buf)
+    return Response(
+        buf.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=stock.csv"},
+    )
+
+
+@bp.route("/export/orders.csv")
+def export_orders():
+    status_val = request.args.get("status")
+    product_id = request.args.get("product_id", type=int)
+    try:
+        status_filter = OrderStatus(status_val) if status_val else None
+    except ValueError:
+        return _err(f"Invalid status '{status_val}'")
+    buf = io.StringIO()
+    service.export_orders_csv(get_db(), buf, product_id=product_id, status=status_filter)
+    return Response(
+        buf.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=orders.csv"},
+    )
 
 
 # ── summary & reorder ─────────────────────────────────────────────────────────

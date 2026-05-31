@@ -407,6 +407,56 @@ def alert_ack_all(ctx):
         click.echo(f"Acknowledged {count} alert(s).")
 
 
+# ── import ───────────────────────────────────────────────────────────────────
+
+@cli.group("import")
+def import_cmd():
+    """Import data from CSV files."""
+
+
+@import_cmd.command("products")
+@click.argument("file", type=click.Path(exists=True, dir_okay=False))
+@click.pass_context
+@_bail
+def import_products(ctx, file):
+    """Import products (and optional opening stock) from a CSV file."""
+    with open(file, newline="", encoding="utf-8") as f:
+        result = service.import_products_csv(_conn(ctx), f)
+    click.echo(f"Import complete: {result['created']} created, {result['skipped']} skipped.")
+    for err in result["errors"]:
+        click.echo(f"  Row {err['row']}: {err['reason']}", err=True)
+
+
+# ── export ───────────────────────────────────────────────────────────────────
+
+@cli.group()
+def export():
+    """Export data to CSV files."""
+
+
+@export.command("stock")
+@click.argument("file", type=click.Path(dir_okay=False))
+@click.pass_context
+def export_stock(ctx, file):
+    """Export current stock levels to a CSV file."""
+    with open(file, "w", newline="", encoding="utf-8") as f:
+        service.export_stock_csv(_conn(ctx), f)
+    click.echo(f"Stock levels exported to {file}")
+
+
+@export.command("orders")
+@click.argument("file", type=click.Path(dir_okay=False))
+@click.option("--product", "product_id", type=int)
+@click.option("--status", type=click.Choice([s.value for s in OrderStatus]))
+@click.pass_context
+def export_orders(ctx, file, product_id, status):
+    """Export orders to a CSV file."""
+    status_filter = OrderStatus(status) if status else None
+    with open(file, "w", newline="", encoding="utf-8") as f:
+        service.export_orders_csv(_conn(ctx), f, product_id=product_id, status=status_filter)
+    click.echo(f"Orders exported to {file}")
+
+
 @cli.command("serve")
 @click.option("--host", default="127.0.0.1", show_default=True)
 @click.option("--port", default=5000, show_default=True, type=int)
