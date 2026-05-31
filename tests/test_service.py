@@ -158,3 +158,72 @@ def test_acknowledge_alert(conn, widget):
 
     service.acknowledge_alert(conn, alerts[0].id)
     assert service.list_alerts(conn, unacknowledged_only=True) == []
+
+
+# ── delete product tests ─────────────────────────────────────────────────────
+
+def test_delete_product(conn):
+    from inventory.models import Product
+    p = service.create_product(conn, Product(None, "DEL-001", "Deletable", 1.00))
+    service.delete_product(conn, p.id)
+    with pytest.raises(service.ProductNotFound):
+        service.get_product(conn, p.id)
+
+
+def test_delete_product_blocked_when_has_orders(conn, widget):
+    service.create_order(conn, widget.id, OrderType.PURCHASE, 5)
+    with pytest.raises(service.InventoryError):
+        service.delete_product(conn, widget.id)
+
+
+def test_delete_product_not_found(conn):
+    with pytest.raises(service.ProductNotFound):
+        service.delete_product(conn, 999)
+
+
+# ── summary tests ────────────────────────────────────────────────────────────
+
+def test_summary_empty(conn):
+    s = service.summary(conn)
+    assert s["products"] == 0
+    assert s["stock_value"] == 0
+    assert s["pending_orders"] == 0
+    assert s["low_stock_products"] == 0
+    assert s["unacknowledged_alerts"] == 0
+
+
+def test_summary_counts(conn, widget):
+    # pending order
+    service.create_order(conn, widget.id, OrderType.PURCHASE, 3)
+    # fulfilled purchase that leaves stock below threshold (widget threshold=5, qty=3)
+    po = service.create_order(conn, widget.id, OrderType.PURCHASE, 3)
+    service.fulfill_order(conn, po.id)
+
+    s = service.summary(conn)
+    assert s["products"] == 1
+    assert s["pending_orders"] == 1
+    assert s["low_stock_products"] == 1
+    assert s["unacknowledged_alerts"] == 1
+    assert s["stock_value"] == pytest.approx(3 * widget.unit_price, rel=1e-6)
+
+
+# ── acknowledge_all_alerts tests ─────────────────────────────────────────────
+
+def test_acknowledge_all_alerts(conn, widget):
+    # generate two alerts: bring stock to 0 via two separate fulfilled purchases
+    po1 = service.create_order(conn, widget.id, OrderType.PURCHASE, 2)
+    service.fulfill_order(conn, po1.id)
+    po2 = service.create_order(conn, widget.id, OrderType.PURCHASE, 1)
+    service.fulfill_order(conn, po2.id)
+
+    pending = service.list_alerts(conn, unacknowledged_only=True)
+    assert len(pending) >= 1
+
+    count = service.acknowledge_all_alerts(conn)
+    assert count == len(pending)
+    assert service.list_alerts(conn, unacknowledged_only=True) == []
+
+
+def test_acknowledge_all_alerts_no_pending(conn):
+    count = service.acknowledge_all_alerts(conn)
+    assert count == 0

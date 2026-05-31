@@ -57,6 +57,21 @@ def update_product(conn: sqlite3.Connection, product: Product) -> Product:
     return _get_product_by_id(conn, product.id)
 
 
+def delete_product(conn: sqlite3.Connection, product_id: int) -> None:
+    _require_product(conn, product_id)
+    order_count = conn.execute(
+        "SELECT COUNT(*) FROM orders WHERE product_id = ?", (product_id,)
+    ).fetchone()[0]
+    if order_count > 0:
+        raise InventoryError(
+            f"Cannot delete product {product_id}: it has {order_count} associated order(s)"
+        )
+    with transaction(conn):
+        conn.execute("DELETE FROM alerts WHERE product_id = ?", (product_id,))
+        conn.execute("DELETE FROM stock_levels WHERE product_id = ?", (product_id,))
+        conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
+
+
 # ---------- stock ----------
 
 def get_stock(conn: sqlite3.Connection, product_id: int) -> StockLevel:
@@ -193,6 +208,34 @@ def list_orders(conn: sqlite3.Connection, product_id: Optional[int] = None,
     return [_row_to_order(r) for r in rows]
 
 
+# ---------- summary ----------
+
+def summary(conn: sqlite3.Connection) -> dict:
+    product_count = conn.execute("SELECT COUNT(*) FROM products").fetchone()[0]
+    stock_value = conn.execute("""
+        SELECT COALESCE(SUM(s.quantity * p.unit_price), 0)
+        FROM stock_levels s JOIN products p ON p.id = s.product_id
+    """).fetchone()[0]
+    pending_orders = conn.execute(
+        "SELECT COUNT(*) FROM orders WHERE status = ?", (OrderStatus.PENDING.value,)
+    ).fetchone()[0]
+    low_stock = conn.execute("""
+        SELECT COUNT(*) FROM stock_levels s
+        JOIN products p ON p.id = s.product_id
+        WHERE s.quantity <= p.reorder_threshold
+    """).fetchone()[0]
+    unacked_alerts = conn.execute(
+        "SELECT COUNT(*) FROM alerts WHERE acknowledged = 0"
+    ).fetchone()[0]
+    return {
+        "products": product_count,
+        "stock_value": stock_value,
+        "pending_orders": pending_orders,
+        "low_stock_products": low_stock,
+        "unacknowledged_alerts": unacked_alerts,
+    }
+
+
 # ---------- alerts ----------
 
 def list_alerts(conn: sqlite3.Connection, unacknowledged_only: bool = False) -> list[Alert]:
@@ -202,6 +245,15 @@ def list_alerts(conn: sqlite3.Connection, unacknowledged_only: bool = False) -> 
     query += " ORDER BY created_at DESC"
     rows = conn.execute(query).fetchall()
     return [_row_to_alert(r) for r in rows]
+
+
+def acknowledge_all_alerts(conn: sqlite3.Connection) -> int:
+    rows = conn.execute("SELECT id FROM alerts WHERE acknowledged = 0").fetchall()
+    if not rows:
+        return 0
+    with transaction(conn):
+        conn.execute("UPDATE alerts SET acknowledged = 1 WHERE acknowledged = 0")
+    return len(rows)
 
 
 def acknowledge_alert(conn: sqlite3.Connection, alert_id: int) -> Alert:

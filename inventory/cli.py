@@ -10,6 +10,20 @@ def _conn(ctx):
     return ctx.obj["conn"]
 
 
+def _bail(fn):
+    """Catch InventoryError and turn it into a clean CLI message."""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except service.InventoryError as e:
+            raise click.ClickException(str(e))
+
+    return wrapper
+
+
 @click.group()
 @click.option("--db", default=None, help="Path to SQLite database file")
 @click.pass_context
@@ -19,6 +33,20 @@ def cli(ctx, db):
     init_db(conn)
     ctx.ensure_object(dict)
     ctx.obj["conn"] = conn
+
+
+# ── summary ──────────────────────────────────────────────────────────────────
+
+@cli.command("summary")
+@click.pass_context
+def summary(ctx):
+    """Show inventory dashboard."""
+    s = service.summary(_conn(ctx))
+    click.echo(f"{'Products:':<26}{s['products']}")
+    click.echo(f"{'Total stock value:':<26}${s['stock_value']:,.2f}")
+    click.echo(f"{'Pending orders:':<26}{s['pending_orders']}")
+    click.echo(f"{'Low-stock products:':<26}{s['low_stock_products']}")
+    click.echo(f"{'Unacknowledged alerts:':<26}{s['unacknowledged_alerts']}")
 
 
 # ── products ────────────────────────────────────────────────────────────────
@@ -60,6 +88,7 @@ def product_list(ctx):
 @click.option("--price", type=float)
 @click.option("--threshold", type=int)
 @click.pass_context
+@_bail
 def product_update(ctx, product_id, sku, name, price, threshold):
     p = service.get_product(_conn(ctx), product_id)
     p.sku = sku or p.sku
@@ -68,6 +97,20 @@ def product_update(ctx, product_id, sku, name, price, threshold):
     p.reorder_threshold = threshold if threshold is not None else p.reorder_threshold
     updated = service.update_product(_conn(ctx), p)
     click.echo(f"Updated product #{updated.id}: {updated.name}")
+
+
+@product.command("delete")
+@click.argument("product_id", type=int)
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
+@click.pass_context
+@_bail
+def product_delete(ctx, product_id, yes):
+    """Delete a product (blocked if it has orders)."""
+    p = service.get_product(_conn(ctx), product_id)
+    if not yes:
+        click.confirm(f"Delete '{p.name}' (#{p.id})?", abort=True)
+    service.delete_product(_conn(ctx), product_id)
+    click.echo(f"Deleted product #{p.id}: {p.name}")
 
 
 # ── stock ────────────────────────────────────────────────────────────────────
@@ -101,27 +144,38 @@ def order():
 @click.argument("product_id", type=int)
 @click.argument("quantity", type=int)
 @click.option("--price", type=float, help="Override unit price")
+@click.option("--fulfill", is_flag=True, help="Fulfill immediately after creating")
 @click.pass_context
-def order_buy(ctx, product_id, quantity, price):
+@_bail
+def order_buy(ctx, product_id, quantity, price, fulfill):
     """Create a purchase order (stock in)."""
     o = service.create_order(_conn(ctx), product_id, OrderType.PURCHASE, quantity, price)
     click.echo(f"Purchase order #{o.id} created: {quantity} units @ ${o.unit_price:.2f} = ${o.total:.2f}")
+    if fulfill:
+        service.fulfill_order(_conn(ctx), o.id)
+        click.echo(f"Order #{o.id} fulfilled.")
 
 
 @order.command("sell")
 @click.argument("product_id", type=int)
 @click.argument("quantity", type=int)
 @click.option("--price", type=float, help="Override unit price")
+@click.option("--fulfill", is_flag=True, help="Fulfill immediately after creating")
 @click.pass_context
-def order_sell(ctx, product_id, quantity, price):
+@_bail
+def order_sell(ctx, product_id, quantity, price, fulfill):
     """Create a sale order (stock out)."""
     o = service.create_order(_conn(ctx), product_id, OrderType.SALE, quantity, price)
     click.echo(f"Sale order #{o.id} created: {quantity} units @ ${o.unit_price:.2f} = ${o.total:.2f}")
+    if fulfill:
+        service.fulfill_order(_conn(ctx), o.id)
+        click.echo(f"Order #{o.id} fulfilled.")
 
 
 @order.command("fulfill")
 @click.argument("order_id", type=int)
 @click.pass_context
+@_bail
 def order_fulfill(ctx, order_id):
     """Fulfill a pending order (applies stock change)."""
     o = service.fulfill_order(_conn(ctx), order_id)
@@ -131,6 +185,7 @@ def order_fulfill(ctx, order_id):
 @order.command("cancel")
 @click.argument("order_id", type=int)
 @click.pass_context
+@_bail
 def order_cancel(ctx, order_id):
     """Cancel an order (reverses stock if fulfilled)."""
     o = service.cancel_order(_conn(ctx), order_id)
@@ -180,10 +235,22 @@ def alert_list(ctx, show_all):
 @alert.command("ack")
 @click.argument("alert_id", type=int)
 @click.pass_context
+@_bail
 def alert_ack(ctx, alert_id):
     """Acknowledge an alert."""
     a = service.acknowledge_alert(_conn(ctx), alert_id)
     click.echo(f"Alert #{a.id} acknowledged.")
+
+
+@alert.command("ack-all")
+@click.pass_context
+def alert_ack_all(ctx):
+    """Acknowledge all pending alerts."""
+    count = service.acknowledge_all_alerts(_conn(ctx))
+    if count == 0:
+        click.echo("No pending alerts.")
+    else:
+        click.echo(f"Acknowledged {count} alert(s).")
 
 
 def main():
