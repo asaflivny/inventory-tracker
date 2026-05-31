@@ -1,4 +1,5 @@
 import click
+import functools
 from pathlib import Path
 
 from .db import get_connection, init_db
@@ -12,15 +13,12 @@ def _conn(ctx):
 
 def _bail(fn):
     """Catch InventoryError and turn it into a clean CLI message."""
-    import functools
-
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
         except service.InventoryError as e:
             raise click.ClickException(str(e))
-
     return wrapper
 
 
@@ -47,6 +45,25 @@ def summary(ctx):
     click.echo(f"{'Pending orders:':<26}{s['pending_orders']}")
     click.echo(f"{'Low-stock products:':<26}{s['low_stock_products']}")
     click.echo(f"{'Unacknowledged alerts:':<26}{s['unacknowledged_alerts']}")
+
+
+# ── reorder ───────────────────────────────────────────────────────────────────
+
+@cli.command("reorder")
+@click.pass_context
+def reorder(ctx):
+    """List products that need restocking, sorted by largest shortfall."""
+    rows = service.list_reorder(_conn(ctx))
+    if not rows:
+        click.echo("All products are above reorder thresholds.")
+        return
+    click.echo(f"{'ID':<5} {'SKU':<15} {'Name':<25} {'Qty':>6} {'Threshold':>10} {'Shortfall':>10}")
+    click.echo("-" * 75)
+    for r in rows:
+        click.echo(
+            f"{r['id']:<5} {r['sku']:<15} {r['name']:<25} "
+            f"{r['quantity']:>6} {r['reorder_threshold']:>10} {r['shortfall']:>10}"
+        )
 
 
 # ── products ────────────────────────────────────────────────────────────────
@@ -115,7 +132,12 @@ def product_delete(ctx, product_id, yes):
 
 # ── stock ────────────────────────────────────────────────────────────────────
 
-@cli.command("stock")
+@cli.group()
+def stock():
+    """Manage stock levels."""
+
+
+@stock.command("list")
 @click.pass_context
 def stock_list(ctx):
     """Show current stock levels."""
@@ -130,6 +152,41 @@ def stock_list(ctx):
         click.echo(
             f"{r['id']:<5} {r['sku']:<15} {r['name']:<25} "
             f"{r['quantity']:>6} {r['reorder_threshold']:>10} {status:<10}"
+        )
+
+
+@stock.command("adjust")
+@click.argument("product_id", type=int)
+@click.argument("delta", type=int)
+@click.pass_context
+@_bail
+def stock_adjust(ctx, product_id, delta):
+    """Apply a direct stock correction (e.g. -3 for shrinkage, +5 for a count correction)."""
+    s = service.adjust_stock(_conn(ctx), product_id, delta)
+    sign = "+" if delta >= 0 else ""
+    click.echo(f"Stock adjusted by {sign}{delta}. New quantity: {s.quantity}")
+
+
+@stock.command("history")
+@click.argument("product_id", type=int)
+@click.pass_context
+@_bail
+def stock_history(ctx, product_id):
+    """Show fulfilled order history with running balance for a product."""
+    p = service.get_product(_conn(ctx), product_id)
+    history = service.stock_history(_conn(ctx), product_id)
+    if not history:
+        click.echo(f"No fulfilled orders for {p.name}.")
+        return
+    click.echo(f"History for {p.name} (SKU: {p.sku})")
+    click.echo(f"{'Order':<7} {'Type':<10} {'Qty':>6} {'Delta':>7} {'Balance':>8}  Date")
+    click.echo("-" * 55)
+    for h in history:
+        sign = "+" if h["delta"] >= 0 else ""
+        click.echo(
+            f"{h['order_id']:<7} {h['order_type']:<10} {h['quantity']:>6} "
+            f"{sign}{h['delta']:>6} {h['balance']:>8}  "
+            f"{h['created_at'].strftime('%Y-%m-%d %H:%M')}"
         )
 
 
@@ -195,18 +252,21 @@ def order_cancel(ctx, order_id):
 @order.command("list")
 @click.option("--product", "product_id", type=int)
 @click.option("--status", type=click.Choice([s.value for s in OrderStatus]))
+@click.option("--since", type=click.DateTime(formats=["%Y-%m-%d"]), metavar="YYYY-MM-DD")
+@click.option("--until", type=click.DateTime(formats=["%Y-%m-%d"]), metavar="YYYY-MM-DD")
 @click.pass_context
-def order_list(ctx, product_id, status):
+def order_list(ctx, product_id, status, since, until):
     status_filter = OrderStatus(status) if status else None
-    orders = service.list_orders(_conn(ctx), product_id, status_filter)
+    orders = service.list_orders(_conn(ctx), product_id, status_filter, since, until)
     if not orders:
         click.echo("No orders.")
         return
-    click.echo(f"{'ID':<5} {'Product':<8} {'Type':<10} {'Qty':>5} {'Price':>8} {'Total':>8} {'Status':<12} Created")
-    click.echo("-" * 80)
+    click.echo(f"{'ID':<5} {'Product':<20} {'Type':<10} {'Qty':>5} {'Price':>8} {'Total':>8} {'Status':<12} Created")
+    click.echo("-" * 90)
     for o in orders:
+        product_label = o.product_name or str(o.product_id)
         click.echo(
-            f"{o.id:<5} {o.product_id:<8} {o.order_type.value:<10} {o.quantity:>5} "
+            f"{o.id:<5} {product_label:<20} {o.order_type.value:<10} {o.quantity:>5} "
             f"{o.unit_price:>8.2f} {o.total:>8.2f} {o.status.value:<12} "
             f"{o.created_at.strftime('%Y-%m-%d %H:%M')}"
         )
@@ -251,6 +311,20 @@ def alert_ack_all(ctx):
         click.echo("No pending alerts.")
     else:
         click.echo(f"Acknowledged {count} alert(s).")
+
+
+@cli.command("serve")
+@click.option("--host", default="127.0.0.1", show_default=True)
+@click.option("--port", default=5000, show_default=True, type=int)
+@click.option("--debug", is_flag=True)
+@click.option("--db", "db_path", default=None, help="Path to SQLite database file")
+def serve(host, port, debug, db_path):
+    """Start the web UI."""
+    from .web import create_app
+    from pathlib import Path
+    app = create_app(Path(db_path) if db_path else None)
+    click.echo(f"Web UI running at http://{host}:{port}")
+    app.run(host=host, port=port, debug=debug)
 
 
 def main():

@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Dashboard</h1>
+
+<div class="stat-grid">
+  <div class="stat-card">
+    <p class="label">Products</p>
+    <p class="value">{{ summary.products }}</p>
+  </div>
+  <div class="stat-card">
+    <p class="label">Stock Value</p>
+    <p class="value">${{ "%.2f"|format(summary.stock_value) }}</p>
+  </div>
+  <div class="stat-card">
+    <p class="label">Pending Orders</p>
+    <p class="value">{{ summary.pending_orders }}</p>
+  </div>
+  <div class="stat-card">
+    <p class="label">Low-Stock Products</p>
+    <p class="value {% if summary.low_stock_products > 0 %}badge-low{% endif %}">{{ summary.low_stock_products }}</p>
+  </div>
+  <div class="stat-card">
+    <p class="label">Unacked Alerts</p>
+    <p class="value {% if summary.unacknowledged_alerts > 0 %}badge-low{% endif %}">{{ summary.unacknowledged_alerts }}</p>
+  </div>
+</div>
+
+{% if alerts %}
+<h2>Pending Alerts</h2>
+<table>
+  <thead><tr><th>#</th><th>Message</th><th>Time</th><th></th></tr></thead>
+  <tbody>
+    {% for a in alerts %}
+    <tr>
+      <td>{{ a.id }}</td>
+      <td>{{ a.message }}</td>
+      <td>{{ a.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td class="row-actions">
+        <form method="post" action="{{ url_for('alert_ack', alert_id=a.id) }}">
+          <button type="submit">Ack</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<form method="post" action="{{ url_for('alert_ack_all') }}">
+  <button type="submit">Acknowledge All</button>
+</form>
+{% else %}
+<p>No pending alerts.</p>
+{% endif %}
+{% endblock %}

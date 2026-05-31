@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inventory Tracker</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.classless.min.css">
+  <style>
+    body { max-width: 1100px; margin: 0 auto; padding: 0 1rem; }
+    nav { display: flex; align-items: center; gap: 1.5rem; padding: 1rem 0; border-bottom: 1px solid var(--pico-muted-border-color); }
+    nav .brand { font-weight: bold; font-size: 1.1rem; margin-right: auto; text-decoration: none; color: inherit; }
+    nav a { text-decoration: none; color: var(--pico-muted-color); font-size: 0.9rem; }
+    nav a:hover, nav a.active { color: var(--pico-primary); }
+    .flash { padding: .75rem 1rem; border-radius: var(--pico-border-radius); margin: 1rem 0; font-size: .9rem; }
+    .flash.success { background: #d1fae5; color: #065f46; }
+    .flash.error   { background: #fee2e2; color: #991b1b; }
+    .badge-low { color: #dc2626; font-weight: 600; }
+    .badge-ok  { color: #16a34a; }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+    .stat-card { border: 1px solid var(--pico-muted-border-color); border-radius: var(--pico-border-radius); padding: 1rem 1.25rem; }
+    .stat-card .label { font-size: .8rem; color: var(--pico-muted-color); margin: 0; }
+    .stat-card .value { font-size: 1.6rem; font-weight: 700; margin: .25rem 0 0; }
+    details summary { cursor: pointer; font-weight: 600; }
+    table { font-size: .9rem; }
+    .row-actions form { display: inline; }
+    .row-actions button { margin: 0; padding: .2rem .6rem; font-size: .8rem; }
+    .filter-bar { display: flex; gap: .75rem; align-items: flex-end; flex-wrap: wrap; margin-bottom: 1rem; }
+    .filter-bar label { font-size: .85rem; }
+    .filter-bar input, .filter-bar select { font-size: .85rem; padding: .3rem .5rem; width: auto; }
+    .filter-bar button { padding: .35rem .8rem; font-size: .85rem; margin: 0; }
+    h1 { margin-top: 1.5rem; }
+  </style>
+</head>
+<body>
+  <nav>
+    <a class="brand" href="{{ url_for('index') }}">📦 Inventory</a>
+    <a href="{{ url_for('index') }}" {% if request.endpoint == 'index' %}class="active"{% endif %}>Dashboard</a>
+    <a href="{{ url_for('products') }}" {% if request.endpoint == 'products' %}class="active"{% endif %}>Products</a>
+    <a href="{{ url_for('stock') }}" {% if request.endpoint in ('stock','stock_history') %}class="active"{% endif %}>Stock</a>
+    <a href="{{ url_for('orders') }}" {% if request.endpoint == 'orders' %}class="active"{% endif %}>Orders</a>
+    <a href="{{ url_for('alerts') }}" {% if request.endpoint == 'alerts' %}class="active"{% endif %}>Alerts</a>
+    <a href="{{ url_for('reorder') }}" {% if request.endpoint == 'reorder' %}class="active"{% endif %}>Reorder</a>
+  </nav>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <div class="flash {{ category }}">{{ message }}</div>
+    {% endfor %}
+  {% endwith %}
+
+  {% block content %}{% endblock %}
+</body>
+</html>

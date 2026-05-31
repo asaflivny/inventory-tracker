@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Stock Levels</h1>
+
+{% if rows %}
+<table>
+  <thead>
+    <tr><th>ID</th><th>SKU</th><th>Name</th><th>Qty</th><th>Threshold</th><th>Status</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.id }}</td>
+      <td><code>{{ r.sku }}</code></td>
+      <td>{{ r.name }}</td>
+      <td>{{ r.quantity }}</td>
+      <td>{{ r.reorder_threshold }}</td>
+      <td>
+        {% if r.quantity <= r.reorder_threshold %}
+          <span class="badge-low">LOW</span>
+        {% else %}
+          <span class="badge-ok">OK</span>
+        {% endif %}
+      </td>
+      <td class="row-actions">
+        <a href="{{ url_for('stock_history', product_id=r.id) }}">History</a>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No stock data.</p>
+{% endif %}
+
+<details>
+  <summary>Adjust Stock</summary>
+  <form method="post" action="{{ url_for('stock_adjust') }}" style="max-width:400px; margin-top:.75rem;">
+    <label>Product
+      <select name="product_id" required>
+        {% for p in products %}
+        <option value="{{ p.id }}">{{ p.name }} ({{ p.sku }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Delta (e.g. -3 for shrinkage, +5 for count correction)
+      <input name="delta" type="number" required placeholder="-3">
+    </label>
+    <button type="submit">Apply</button>
+  </form>
+</details>
+{% endblock %}

@@ -1,6 +1,6 @@
 import sqlite3
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Union
 
 from .db import transaction
 from .models import Alert, Order, OrderStatus, OrderType, Product, StockLevel
@@ -25,16 +25,19 @@ class InvalidStatusTransition(InventoryError):
 # ---------- products ----------
 
 def create_product(conn: sqlite3.Connection, product: Product) -> Product:
-    with transaction(conn):
-        cur = conn.execute(
-            "INSERT INTO products (sku, name, unit_price, reorder_threshold) VALUES (?, ?, ?, ?)",
-            (product.sku, product.name, product.unit_price, product.reorder_threshold),
-        )
-        product_id = cur.lastrowid
-        conn.execute(
-            "INSERT INTO stock_levels (product_id, quantity) VALUES (?, 0)",
-            (product_id,),
-        )
+    try:
+        with transaction(conn):
+            cur = conn.execute(
+                "INSERT INTO products (sku, name, unit_price, reorder_threshold) VALUES (?, ?, ?, ?)",
+                (product.sku, product.name, product.unit_price, product.reorder_threshold),
+            )
+            product_id = cur.lastrowid
+            conn.execute(
+                "INSERT INTO stock_levels (product_id, quantity) VALUES (?, 0)",
+                (product_id,),
+            )
+    except sqlite3.IntegrityError:
+        raise InventoryError(f"A product with SKU '{product.sku}' already exists")
     return _get_product_by_id(conn, product_id)
 
 
@@ -88,6 +91,63 @@ def list_stock(conn: sqlite3.Connection) -> list[dict]:
         FROM products p
         JOIN stock_levels s ON p.id = s.product_id
         ORDER BY p.sku
+    """).fetchall()
+    return [dict(r) for r in rows]
+
+
+def adjust_stock(conn: sqlite3.Connection, product_id: int, delta: int) -> StockLevel:
+    """Apply a direct stock correction. Positive delta adds units, negative removes."""
+    _require_product(conn, product_id)
+    stock = get_stock(conn, product_id)
+    new_qty = stock.quantity + delta
+    if new_qty < 0:
+        raise InsufficientStock(
+            f"Adjustment of {delta:+d} would bring stock to {new_qty}"
+        )
+    with transaction(conn):
+        conn.execute(
+            "UPDATE stock_levels SET quantity = ? WHERE product_id = ?",
+            (new_qty, product_id),
+        )
+        _insert_alert_if_low(conn, product_id, new_qty)
+    return StockLevel(product_id=product_id, quantity=new_qty)
+
+
+def stock_history(conn: sqlite3.Connection, product_id: int) -> list[dict]:
+    """Return fulfilled orders for a product with a running stock balance."""
+    _require_product(conn, product_id)
+    rows = conn.execute("""
+        SELECT id, order_type, quantity, unit_price, created_at
+        FROM orders
+        WHERE product_id = ? AND status = 'fulfilled'
+        ORDER BY created_at ASC
+    """, (product_id,)).fetchall()
+    history = []
+    balance = 0
+    for r in rows:
+        delta = r["quantity"] if r["order_type"] == "purchase" else -r["quantity"]
+        balance += delta
+        history.append({
+            "order_id": r["id"],
+            "order_type": r["order_type"],
+            "quantity": r["quantity"],
+            "delta": delta,
+            "balance": balance,
+            "unit_price": r["unit_price"],
+            "created_at": datetime.fromisoformat(r["created_at"]),
+        })
+    return history
+
+
+def list_reorder(conn: sqlite3.Connection) -> list[dict]:
+    """Return products whose stock is at or below their reorder threshold."""
+    rows = conn.execute("""
+        SELECT p.id, p.sku, p.name, p.reorder_threshold, s.quantity,
+               (p.reorder_threshold - s.quantity) AS shortfall
+        FROM products p
+        JOIN stock_levels s ON p.id = s.product_id
+        WHERE s.quantity <= p.reorder_threshold
+        ORDER BY shortfall DESC, p.sku
     """).fetchall()
     return [dict(r) for r in rows]
 
@@ -194,16 +254,29 @@ def cancel_order(conn: sqlite3.Connection, order_id: int) -> Order:
 
 
 def list_orders(conn: sqlite3.Connection, product_id: Optional[int] = None,
-                status: Optional[OrderStatus] = None) -> list[Order]:
-    query = "SELECT * FROM orders WHERE 1=1"
+                status: Optional[OrderStatus] = None,
+                since: Optional[datetime] = None,
+                until: Optional[datetime] = None) -> list[Order]:
+    query = """
+        SELECT o.*, p.name AS product_name, p.sku AS product_sku
+        FROM orders o
+        JOIN products p ON p.id = o.product_id
+        WHERE 1=1
+    """
     params: list = []
     if product_id is not None:
-        query += " AND product_id = ?"
+        query += " AND o.product_id = ?"
         params.append(product_id)
     if status is not None:
-        query += " AND status = ?"
+        query += " AND o.status = ?"
         params.append(status.value)
-    query += " ORDER BY created_at DESC"
+    if since is not None:
+        query += " AND o.created_at >= ?"
+        params.append(since.strftime("%Y-%m-%dT00:00:00"))
+    if until is not None:
+        query += " AND o.created_at <= ?"
+        params.append(until.strftime("%Y-%m-%dT23:59:59"))
+    query += " ORDER BY o.created_at DESC"
     rows = conn.execute(query, params).fetchall()
     return [_row_to_order(r) for r in rows]
 
@@ -309,6 +382,7 @@ def _row_to_product(row) -> Product:
 
 
 def _row_to_order(row) -> Order:
+    keys = row.keys()
     return Order(
         id=row["id"],
         product_id=row["product_id"],
@@ -317,6 +391,8 @@ def _row_to_order(row) -> Order:
         unit_price=row["unit_price"],
         status=OrderStatus(row["status"]),
         created_at=datetime.fromisoformat(row["created_at"]),
+        product_name=row["product_name"] if "product_name" in keys else None,
+        product_sku=row["product_sku"] if "product_sku" in keys else None,
     )
 
 

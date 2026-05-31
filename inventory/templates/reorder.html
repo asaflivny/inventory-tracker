@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Reorder List</h1>
+
+{% if rows %}
+<p>{{ rows|length }} product{{ 's' if rows|length != 1 }} need restocking, sorted by largest shortfall.</p>
+<table>
+  <thead>
+    <tr><th>ID</th><th>SKU</th><th>Name</th><th>Qty</th><th>Threshold</th><th>Shortfall</th></tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.id }}</td>
+      <td><code>{{ r.sku }}</code></td>
+      <td>{{ r.name }}</td>
+      <td class="badge-low">{{ r.quantity }}</td>
+      <td>{{ r.reorder_threshold }}</td>
+      <td><strong>{{ r.shortfall }}</strong></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>All products are above their reorder thresholds.</p>
+{% endif %}
+{% endblock %}

@@ -227,3 +227,131 @@ def test_acknowledge_all_alerts(conn, widget):
 def test_acknowledge_all_alerts_no_pending(conn):
     count = service.acknowledge_all_alerts(conn)
     assert count == 0
+
+
+# ── adjust_stock tests ───────────────────────────────────────────────────────
+
+def test_adjust_stock_positive(conn, widget):
+    po = service.create_order(conn, widget.id, OrderType.PURCHASE, 10)
+    service.fulfill_order(conn, po.id)
+    s = service.adjust_stock(conn, widget.id, 5)
+    assert s.quantity == 15
+
+
+def test_adjust_stock_negative(conn, widget):
+    po = service.create_order(conn, widget.id, OrderType.PURCHASE, 10)
+    service.fulfill_order(conn, po.id)
+    s = service.adjust_stock(conn, widget.id, -3)
+    assert s.quantity == 7
+
+
+def test_adjust_stock_to_zero(conn, widget):
+    po = service.create_order(conn, widget.id, OrderType.PURCHASE, 5)
+    service.fulfill_order(conn, po.id)
+    s = service.adjust_stock(conn, widget.id, -5)
+    assert s.quantity == 0
+
+
+def test_adjust_stock_below_zero_raises(conn, widget):
+    with pytest.raises(service.InsufficientStock):
+        service.adjust_stock(conn, widget.id, -1)
+
+
+def test_adjust_stock_triggers_alert(conn, widget):
+    # widget threshold=5; add 5 then remove 3 → qty=2, below threshold
+    po = service.create_order(conn, widget.id, OrderType.PURCHASE, 10)
+    service.fulfill_order(conn, po.id)
+    service.acknowledge_all_alerts(conn)
+
+    service.adjust_stock(conn, widget.id, -8)  # 10 - 8 = 2, below threshold 5
+    alerts = service.list_alerts(conn, unacknowledged_only=True)
+    assert len(alerts) == 1
+
+
+# ── stock_history tests ──────────────────────────────────────────────────────
+
+def test_stock_history_empty(conn, widget):
+    assert service.stock_history(conn, widget.id) == []
+
+
+def test_stock_history_running_balance(conn, widget):
+    po = service.create_order(conn, widget.id, OrderType.PURCHASE, 20)
+    service.fulfill_order(conn, po.id)
+    so = service.create_order(conn, widget.id, OrderType.SALE, 7)
+    service.fulfill_order(conn, so.id)
+
+    history = service.stock_history(conn, widget.id)
+    assert len(history) == 2
+    assert history[0]["balance"] == 20
+    assert history[1]["balance"] == 13
+
+
+def test_stock_history_excludes_pending(conn, widget):
+    service.create_order(conn, widget.id, OrderType.PURCHASE, 10)  # pending, not fulfilled
+    assert service.stock_history(conn, widget.id) == []
+
+
+def test_stock_history_excludes_cancelled(conn, widget):
+    po = service.create_order(conn, widget.id, OrderType.PURCHASE, 10)
+    service.fulfill_order(conn, po.id)
+    service.cancel_order(conn, po.id)
+    assert service.stock_history(conn, widget.id) == []
+
+
+# ── list_reorder tests ───────────────────────────────────────────────────────
+
+def test_list_reorder_empty_when_all_ok(conn, widget):
+    po = service.create_order(conn, widget.id, OrderType.PURCHASE, 100)
+    service.fulfill_order(conn, po.id)
+    assert service.list_reorder(conn) == []
+
+
+def test_list_reorder_shows_low_stock(conn, widget):
+    # widget starts at qty=0, threshold=5 → should appear
+    rows = service.list_reorder(conn)
+    assert len(rows) == 1
+    assert rows[0]["id"] == widget.id
+    assert rows[0]["shortfall"] == 5
+
+
+def test_list_reorder_sorted_by_shortfall(conn):
+    from inventory.models import Product
+    p1 = service.create_product(conn, Product(None, "A", "Alpha", 1.0, reorder_threshold=10))
+    p2 = service.create_product(conn, Product(None, "B", "Beta", 1.0, reorder_threshold=20))
+    # Both at qty=0; p2 has bigger shortfall
+    rows = service.list_reorder(conn)
+    assert rows[0]["id"] == p2.id
+    assert rows[1]["id"] == p1.id
+
+
+# ── list_orders date filter + product name tests ─────────────────────────────
+
+def test_list_orders_includes_product_name(conn, widget):
+    service.create_order(conn, widget.id, OrderType.PURCHASE, 5)
+    orders = service.list_orders(conn)
+    assert orders[0].product_name == widget.name
+    assert orders[0].product_sku == widget.sku
+
+
+def test_list_orders_filter_by_since(conn, widget):
+    from datetime import datetime, timedelta
+    service.create_order(conn, widget.id, OrderType.PURCHASE, 5)
+    tomorrow = datetime.utcnow() + timedelta(days=1)
+    orders = service.list_orders(conn, since=tomorrow)
+    assert orders == []
+
+
+def test_list_orders_filter_by_until(conn, widget):
+    from datetime import datetime, timedelta
+    service.create_order(conn, widget.id, OrderType.PURCHASE, 5)
+    yesterday = datetime.utcnow() - timedelta(days=1)
+    orders = service.list_orders(conn, until=yesterday)
+    assert orders == []
+
+
+def test_list_orders_since_until_includes_today(conn, widget):
+    from datetime import datetime
+    service.create_order(conn, widget.id, OrderType.PURCHASE, 5)
+    today = datetime.utcnow()
+    orders = service.list_orders(conn, since=today, until=today)
+    assert len(orders) == 1

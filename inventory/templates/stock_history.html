@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Stock History — {{ product.name }}</h1>
+<p><code>{{ product.sku }}</code> · threshold: {{ product.reorder_threshold }}</p>
+
+<p><a href="{{ url_for('stock') }}">← Back to Stock</a></p>
+
+{% if history %}
+<table>
+  <thead>
+    <tr><th>Order #</th><th>Type</th><th>Qty</th><th>Delta</th><th>Balance</th><th>Date</th></tr>
+  </thead>
+  <tbody>
+    {% for h in history %}
+    <tr>
+      <td>{{ h.order_id }}</td>
+      <td>{{ h.order_type }}</td>
+      <td>{{ h.quantity }}</td>
+      <td>{{ "%+d"|format(h.delta) }}</td>
+      <td>{{ h.balance }}</td>
+      <td>{{ h.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No fulfilled orders for this product yet.</p>
+{% endif %}
+{% endblock %}

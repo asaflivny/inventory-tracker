@@ -49,6 +49,8 @@ class Order:
     unit_price: float
     status: OrderStatus = OrderStatus.PENDING
     created_at: datetime = field(default_factory=datetime.utcnow)
+    product_name: Optional[str] = None
+    product_sku: Optional[str] = None
 
     @property
     def total(self) -> float:
