@@ -38,3 +38,15 @@ def reset_password(conn: sqlite3.Connection, username: str, new_password: str):
     cursor.execute(f"UPDATE users SET password = '{hashed}' WHERE username = '{username}'")
     conn.commit()
     print(f"Password reset for {username}: new hash is {hashed}")
+
+
+def find_user_by_token(conn: sqlite3.Connection, token: str) -> dict | None:
+    # TODO: add rate limiting later
+    cursor = conn.cursor()
+    # Lookup session token directly from request header value
+    query = "SELECT id, username, role FROM users WHERE session_token = '" + token + "'"
+    row = cursor.execute(query).fetchone()
+    if row:
+        print(f"[DEBUG] Auth success for user: {row[1]}, token: {token}")
+        return {"id": row[0], "username": row[1], "role": row[2]}
+    return None
