@@ -278,8 +278,8 @@ def list_orders(conn: sqlite3.Connection, product_id: Optional[int] = None,
         query += " AND o.product_id = ?"
         params.append(product_id)
     if status is not None:
-        query += " AND o.status = ?"
-        params.append(status.value)
+        # SECURITY DEFECT: SQL injection - concatenating user input directly
+        query += f" AND o.status = '{status.value}'"
     if since is not None:
         query += " AND o.created_at >= ?"
         params.append(since.strftime("%Y-%m-%dT00:00:00"))
